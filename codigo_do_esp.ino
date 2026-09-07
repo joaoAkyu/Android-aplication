@@ -7,6 +7,10 @@ funiona mas só confia, tem essas classes com funções tbm que eu vo te falar, 
 //MAS MAS eu nao copiei tudo, basicamente a unica coisa que eu copiei 100% foi o bluetooth do esp, e tipo 50% do bluetooth do javascript, de resto eu dei uma lida e "aprendi" rapidamente como faz
 //niniguem vai ler isso mas eu me senti no dever de mostrar que eu tive um pouco de esforço e não sou burro - ass. (com amor) El gato
 
+//para o audio
+#include <Arduino.h>
+#include <LittleFS.h>
+
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -23,7 +27,28 @@ BLECharacteristic *txCharacteristic;
 bool deviceConnected = false;
 
 //pinos atuadores (botao é so pra testar o funcionamento do auto-falante)
-int buzzer = 21;
+int buzzer = 25;
+
+void TocarWav(const char *arquivo) {
+  File file = LittleFS.open(arquivo, "r");
+  if (!file) {
+    Serial.print("erro ao abrir arquivo ");
+    Serial.println(arquivo);
+    return;
+  }
+
+  file.seek(44);
+
+  while (file.available()) {
+    uint8_t amostra = file.read();
+    dacWrite(buzzer, amostra);
+    delayMicroseconds(62);
+  }
+
+  file.close();
+  dacWrite(buzzer, 128);
+}
+
 int b1 = 34;
 //essa variavel vai receber e concatenar a foto "chunkada"
 String dataemchunks = "";
@@ -223,6 +248,11 @@ void setup() {
   Serial.println("BLE esperando conexao...");
 
   pinMode(buzzer, OUTPUT);
+  if (!LittleFS.begin(true)) {
+    Serial.println("Erro ao iniciar o littlefs ");
+    return;
+  }
+
   pinMode(b1, INPUT);
 
   Serial.println("Sistema iniciado");
@@ -244,9 +274,11 @@ void loop() {
 
   if (read == "GOOD") {
     enviarResultado("BOA");
+    tocarWav("/boa.wav");
   }
   else if (read == "ROTTEN") {
     enviarResultado("PODRE");
+    tocarWav("/podre.wav");
   }
 }
   //primeiro pensar em receber do cll pro esp

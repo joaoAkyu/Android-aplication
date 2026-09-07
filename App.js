@@ -1,22 +1,55 @@
 // "npx expo start --dev-client"
 import React, { useRef, useState, useEffect } from 'react';
-import { View, Button, Image, StyleSheet, Text, TextInput } from 'react-native';
+import { View, Button, Image, StyleSheet, Text, TextInput, PermissionsAndroid, Platform } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { BleManager } from 'react-native-ble-plx';
+import { BleManager, State } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
 
 export default function App() {
+//bt é runtime, precisa dar a permissao e dps roda continua
+  async function requestBluetoothPermission() {
+    if (Platform.OS !== 'android') {
+      return true;
+    }
+
+    if (Platform.Version >= 31) {
+      const result = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      ]);
+
+      return (
+        result[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] ===
+          PermissionsAndroid.RESULTS.GRANTED &&
+        result[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] ===
+          PermissionsAndroid.RESULTS.GRANTED
+      );
+    }
+
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      {
+        title: 'Permissão de localização',
+        message:
+          'O aplicativo precisa dessa permissão para encontrar dispositivos Bluetooth.',
+        buttonPositive: 'Permitir',
+        buttonNegative: 'Cancelar',
+      }
+    );
+
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  }
 
   const manager = useRef(null);
 
-    useEffect(() => {
-      manager.current = new BleManager();
+  useEffect(() => {
+    manager.current = new BleManager();
 
-      return () => {
-        manager.current?.destroy();
-        manager.current = null;
-      };
-    }, []);
+    return () => {
+      manager.current?.destroy();
+      manager.current = null;
+    };
+  }, []);
 
   const cameraRef = useRef(null);
   const [photo, setPhoto] = useState(null);
@@ -42,31 +75,64 @@ export default function App() {
 
   // IDs do dispositivo Bluetooth
   // device é um objeto pra eu achar o id dele
-  const device = await encontrarESP();
 
   //função que acha o id DO esp pra ficar legal, isso aqui foi facil :D
   async function encontrarESP() {
-    return new Promise ((resolve, reject) => {
-    manager.current.startDeviceScan(null, null, (error, device) => {
+    return new Promise((resolve, reject) => {
+      if (!manager.current) {
+        reject(new Error("BleManager não foi inicializado"));
+        return;
+      }
 
-        if (error) {
-            console.log(error);
+      let dispositivosEncontrados = [];
+
+      const timeout = setTimeout(() => {
+        manager.current?.stopDeviceScan();
+
+        console.log("SCAN FINALIZADO");
+        console.log("DISPOSITIVOS ENCONTRADOS:", dispositivosEncontrados);
+
+        reject(new Error("ESP32 não encontrado"));
+      }, 10000);
+
+      manager.current.startDeviceScan(
+        null,
+        null,
+        (error, device) => {
+          if (error) {
+            clearTimeout(timeout);
+            manager.current?.stopDeviceScan();
+
+            console.log("ERRO NO SCAN:", error);
+
+            reject(error);
             return;
-        }
+          }
 
-        console.log(device?.name, device?.id);
+          if (device) {
+            console.log(
+              "DEVICE:",
+              device.name,
+              device.localName,
+              device.id
+            );
 
-        if (device?.name === "ESP FRANK2") {
-            manager.current.stopDeviceScan();
+            dispositivosEncontrados.push({
+              name: device.name,
+              localName: device.localName,
+              id: device.id,
+            });
+          }
         }
+      );
     });
-  });
- }
+  }
 
-  const serviceUUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 
-  const writeCharacteristicUUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
-  const notifyCharacteristicUUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
+
+  const serviceUUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+  const writeCharacteristicUUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+  const notifyCharacteristicUUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
 
   // aqui vem uma parte HORRIVEL desse codigo, é melhor cortar a imagem em pedaços doq mandar 1 inte
@@ -83,23 +149,54 @@ export default function App() {
   //aqui eu fiz uma função que espera conexão do bt, ele tenta conectar e le o estado da conexão
   //se conexão ta daora, nao tem problema, else catch erro
 
-  async function connectBt() {
-    try {
-      const deviceConectado = await manager.current.connectToDevice(device.id);
-      const conectado = await device.isConnected();
+async function connectBt() {
+  try {
 
-      if (conectado) {
-        console.log("conectado");
-        return device;
-      }
-      else {
-        console.log("nao conectado")
-      }
+    // Primeiro garante que o aplicativo tem permissão para usar Bluetooth
+    const permissionGranted = await requestBluetoothPermission();
+
+    console.log("PERMISSÃO BLUETOOTH:", permissionGranted);
+
+    if (!permissionGranted) {
+      console.log("Bluetooth não autorizado");
+      return null;
     }
-    catch (error) {
-        console.log("erro : ", error);
+
+    // Verifica se o Bluetooth está ligado
+    const bluetoothState = await manager.current.state();
+
+    console.log("ESTADO BLUETOOTH:", bluetoothState);
+
+    if (bluetoothState !== State.PoweredOn) {
+      console.log("Bluetooth desligado ou indisponível");
+      return null;
+    }
+
+    console.log("INICIANDO SCAN...");
+
+    // Procura o ESP32 somente quando for necessário conectar
+    const device = await encontrarESP();
+
+    console.log("ESP encontrado:", device.name, device.id);
+
+    const deviceConectado = await manager.current.connectToDevice(device.id);
+
+    const conectado = await deviceConectado.isConnected();
+
+    if (conectado) {
+      console.log("conectado");
+      return deviceConectado;
+    }
+    else {
+      console.log("nao conectado");
+      return null;
     }
   }
+  catch (error) {
+    console.log("erro : ", error);
+    return null;
+  }
+}
 
   const tamanhodocorte = 9;
 
@@ -202,7 +299,7 @@ export default function App() {
 
       //eu vou fazer um for para ir de pouco em pouco cortando e enviando pedaços, função async espe
       //ra o processo inteiro ser finalizado para depois continuar o codigo
-      // eu te amo função async <3
+      //eu te amo função async <3
 
       //isso aqui é pra por o texto antes da foto pra saber onde começar
       const data = Buffer.from("INICIOAPP").toString("base64");
@@ -270,7 +367,12 @@ export default function App() {
   }
 
   return (
+
     <View style={styles.container}>
+    <Image
+              source = {require('./assets/logo.png')}
+              style = {{height : 200, width : 200}}
+    />
       <View style={styles.buttonRow}>
         <Button title="tirar foto" onPress={takePhoto} />
         <Button title="inverter camera" onPress={toggleCameraFacing} />
@@ -289,6 +391,7 @@ export default function App() {
       {photo && (
         <Image source={{ uri: photo }} style={styles.preview} />
       )}
+
     </View>
   );
 }
